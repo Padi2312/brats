@@ -11,7 +11,7 @@ from torchvision import transforms
 
 import config
 from paths import Paths
-from utils import load_nifti_data
+from utils import RandomChoice, load_nifti_data
 
 
 class BratsDataset(Dataset):
@@ -40,11 +40,11 @@ class BratsDataset(Dataset):
         mask = self.__preprocess_mask(mask)
 
         if self.custom_transforms is not None:
-            seed = np.random.randint(2147836)
-            random.seed(seed)
+            state = torch.get_rng_state()
             image = self.custom_transforms(image)
-            random.seed(seed)
+            torch.set_rng_state(state)
             mask = self.custom_transforms(mask)
+
         return image, mask
 
     def __preprocess_image(self, image):
@@ -52,9 +52,7 @@ class BratsDataset(Dataset):
             processed_image = torch.from_numpy(raw_img)
             processed_image = torch.nn.functional.normalize(processed_image)
             processed_image = self.__reshape_slices(processed_image)
-            processed_image = torchvision.transforms.Resize(
-                size=(config.IMAGE_WIDTH, config.IMAGE_HEIGHT)
-            )(processed_image)
+            processed_image = self.__resize_image(processed_image)
             processed_image = processed_image.to(torch.float)
             return processed_image
 
@@ -72,19 +70,22 @@ class BratsDataset(Dataset):
 
     def __preprocess_mask(self, mask):
         mask[mask == 4] = 3
-
         mask = self.__reshape_slices(mask)
         new_mask = torch.from_numpy(mask)
-        new_mask = torchvision.transforms.Resize(
-            size=(config.IMAGE_WIDTH, config.IMAGE_HEIGHT)
-        )(new_mask)
-        new_mask = torch.nn.functional.one_hot(new_mask.long(),4)
-        new_mask = torch.movedim(new_mask,-1,0)
-        new_mask = new_mask.to(torch.float)
+        new_mask = self.__resize_image(new_mask)
+        # new_mask = torch.nn.functional.one_hot(new_mask.long(), num_classes=4)
+        # new_mask = new_mask.to(torch.float)
+        # new_mask = new_mask.movedim(-1, 0)
+        # new_mask = new_mask.unsqueeze(0)
         return new_mask
 
     def __reshape_slices(self, obj):
         return obj[14:142, ...]
+
+    def __resize_image(self, obj):
+        return torchvision.transforms.Resize(
+            size=(config.IMAGE_WIDTH, config.IMAGE_HEIGHT)
+        )(obj)
 
 
 if __name__ == "__main__":
@@ -92,43 +93,29 @@ if __name__ == "__main__":
     image_paths, mask_paths = paths.get_file_path_list_multi_channel()
     custom_transforms = transforms.Compose(
         transforms=[
-            transforms.RandomHorizontalFlip(0.5),
-            transforms.RandomVerticalFlip(0.5),
-            transforms.RandomRotation(90)
+            transforms.RandomHorizontalFlip(),
+            transforms.RandomVerticalFlip(),
+            transforms.RandomRotation(90),
         ]
     )
 
-    img_path, mask_path = image_paths[0:1], mask_paths[0:1]
+    img_path, mask_path = image_paths[0:3], mask_paths[0:3]
     dataset = BratsDataset(
         image_paths=img_path,
         mask_paths=mask_path,
         custom_transforms=custom_transforms,
     )
-    non_trans_dataset = BratsDataset(img_path, mask_path)
+    raw_dataset = BratsDataset(img_path, mask_path)
+    x, y = next(iter(dataset))
+    raw_x, raw_y = next(iter(raw_dataset))
 
-    data_loader = DataLoader(dataset, batch_size=1, shuffle=False)
-    non_trans_data_loader = DataLoader(non_trans_dataset, batch_size=1, shuffle=False)
+    print(f"Image shape: {x.shape} | Mask shape: {y.shape}")
 
-    x, y = next(iter(data_loader))
-    non_tr_x, non_tr_y = next(iter(non_trans_data_loader))
+    fig, ax = plt.subplots(ncols=2, figsize=(10, 10))
+    ax[0].imshow(x[2][59], cmap="gray")
+    ax[0].imshow(y[59], alpha=0.3, cmap="viridis")
 
-    size_bytes_x = x.nelement() * x.element_size()
-    size_bytes_y = y.nelement() * y.element_size()
-    print(size_bytes_x // 1000000, "MB")
-    print(size_bytes_y // 1000000, "MB")
+    ax[1].imshow(raw_x[2][59], cmap="gray")
+    ax[1].imshow(raw_y[59], alpha=0.3, cmap="viridis")
 
-    fig, ax = plt.subplots(ncols=3)
-    ax[0].imshow(x[0][2][59], cmap="gray")
-    ax[0].imshow(y[0][59], alpha=0.3, cmap="viridis")
-
-    ax[1].imshow(non_tr_x[0][2][59], cmap="gray")
-    ax[1].imshow(non_tr_y[0][59], alpha=0.3, cmap="viridis")
-
-    ax[2].imshow(non_tr_x[0][2][59], cmap="gray")
-    # plt.imshow(x[0][2][59], cmap="gray")
-    # plt.imshow(y[0][59], alpha=0.3, cmap="viridis")
-    # plt.imshow(y[0][0][59], alpha=0.2, cmap="Blues")
-    # plt.imshow(y[0][1][59], alpha=0.2, cmap="Greens")
-    # plt.imshow(y[0][2][59], alpha=0.2, cmap="Reds")
-    # plt.imshow(y[0][3][59], alpha=0.2, cmap="Purples")
     plt.show()

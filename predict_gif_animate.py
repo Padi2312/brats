@@ -1,15 +1,18 @@
-from matplotlib.animation import FuncAnimation
 import os
 
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
+import torchmetrics
+from matplotlib.animation import FuncAnimation, PillowWriter
 from torch.utils.data import DataLoader, random_split
+from torchvision import transforms
 
 import config
 from dataset import BratsDataset
-from model import UNet3D
+from neural_network_v2 import UNet
 from paths import Paths
+from utils import DICE, RandomChoice
 
 
 def getImageSlice(data, image_slice):
@@ -22,37 +25,34 @@ def getImageSlice_first_dim(data, image_slice):
 
 if __name__ == "__main__":
 
-    model_path = "./output_models/unet_model50232.pt"
-    # loaded = torch.load(model_path)
-    # print(loaded["epoch"], loaded["loss"])
-    # model = UNet(config.INPUT_CHANNELS,
-    #              config.OUTPUT_CHANNELS).to(config.DEVICE)
-    # model.load_state_dict(loaded['model_state_dict'])
-    model = UNet3D(
+    model_path = (
+        "./output_models/model_17-2-2023-57_B2_E20_LR0.0001_WxH_64x64_64_128_256_512.pt"
+    )
+    model = UNet(
         in_channels=config.INPUT_CHANNELS,
         out_channels=config.OUTPUT_CHANNELS,
-        n_features=[32, 64, 128, 256],
+        # features=[32, 64, 128, 256],
+        features=[64, 128, 256, 512],
     ).to(config.DEVICE)
     model.load_state_dict(torch.load(model_path))
     model.eval()
 
     paths = Paths(config.DATASET_PATH)
     image_paths, mask_paths = paths.get_file_path_list_multi_channel()
-
     # create datasets
     dataset = BratsDataset(
-        image_paths=image_paths[:9],
-        mask_paths=mask_paths[:9],
+        image_paths=image_paths,  # [0:19],
+        mask_paths=mask_paths,  # [0:19],
+        # custom_transforms=transformations,
     )
 
     train_dataset, test_dataset = random_split(
-        dataset, [0.8, 0.2], torch.Generator().manual_seed(42)
+        dataset,
+        [1 - config.VAL_SPLIT, config.VAL_SPLIT],
+        torch.Generator().manual_seed(42),
     )
 
-    print(f"[INFO] {len(dataset)} training images and {len(dataset)} test images found")
-    print(
-        f"[INFO] Len train_dataset: {len(train_dataset)} | Len test_dataset: {len(test_dataset)}"
-    )
+    print(f"[INFO] {len(test_dataset)} test images found")
 
     test_loader = DataLoader(
         test_dataset,
@@ -62,69 +62,60 @@ if __name__ == "__main__":
         num_workers=os.cpu_count(),
     )
 
-    predictions = []
-    true_labels = []
-    input_images = []
-    amax = None
+    prediction = None
+    label = None
+    image = None
+    acc = torchmetrics.JaccardIndex(task="multiclass", num_classes=4).to(config.DEVICE)
+    # score = torchmetrics.Dice(num_classes=4).to(config.DEVICE)
+    score = DICE(num_classes=4).to(config.DEVICE)
+    running_dice = 0.0
+    print(f"{len(test_loader.dataset)}")
     with torch.no_grad():
         for inputs, labels in test_loader:
             # Move the inputs and labels to the specified device
             inputs = inputs.to(config.DEVICE)
-            labels = labels.to(config.DEVICE)
+            labels = labels.to(config.DEVICE).long()
             # Forward pass
             outputs = model(inputs)
-            input_images.append(inputs.cpu().numpy())
+            running_dice += score(outputs, labels)
 
-            # outputs[outputs == 0] = torch.nan
-            print(f"{outputs.shape}")
+            acc.update(outputs, labels)
             softmax = torch.softmax(outputs, dim=1)
-            argmax = torch.where(outputs > 0.7, outputs, 1)
-            amax = argmax.cpu().numpy()
-            print(f"S {softmax.shape}")
-            print(torch.max(softmax), softmax.shape)
-            print(f"A {argmax.shape}")
-            print(torch.max(argmax), argmax.shape)
-            predicted = softmax.cpu().numpy()
-            labels = labels.cpu().numpy()
+            argmaxed = torch.argmax(softmax, 1)
+            outputs = argmaxed
 
-            # Append the predictions and true labels to the lists
-            predictions.append(predicted)
-            true_labels.append(labels)
+            prediction = outputs.cpu().float()
+            prediction[prediction == 0] = torch.nan
 
-            # Concatenate the lists of predictions and true labels
-        predictions = np.concatenate(predictions)
-        true_labels = np.concatenate(true_labels)
+            label = labels.cpu().float()
+            label[label == 0] = torch.nan
+            image = inputs.cpu()
 
-    print("Prediction shape:", predictions[0].shape)
-    print("Label shape:", true_labels[0].shape)
-    print("Input image shape:", input_images[0][0].shape)
+    print(f"DICE: {running_dice/len(test_loader.dataset)}")
+    print(f"Accuracy: {acc.compute()*100:.2f}%")
+    print("Prediction shape:", prediction.shape)
+    print("Label shape:", label.shape)
+    print("Image shape:", image.shape)
 
-    torch.save(
-        {"image": input_images, "label": true_labels, "prediction": predictions},
-        "prediction_output.pt",
-    )
-
-    fig, ax = plt.subplots()
+    fig, ax = plt.subplots(ncols=2)
 
     def animate(index):
-        ax.clear()
-        data = getImageSlice_first_dim(predictions[0][0], index)
-        data_1 = getImageSlice_first_dim(predictions[0][1], index)
-        data_2 = getImageSlice_first_dim(predictions[0][2], index)
-        data_3 = getImageSlice_first_dim(predictions[0][3], index)
+        ax[0].clear()
+        ax[1].clear()
+        data = getImageSlice_first_dim(prediction[0], index)
+        input = getImageSlice_first_dim(image[0][0], index)
+        label_img = getImageSlice_first_dim(label[0], index)
 
-        input = getImageSlice_first_dim(input_images[0][0][0], index)
-        label = getImageSlice_first_dim(true_labels[0][0], index)
+        ax[0].imshow(input, cmap="gray")
+        ax[0].imshow(data, alpha=0.5, cmap="viridis")
+        ax[0].set_title("Preditcion")
 
-        #am = getImageSlice_first_dim(amax[0][3], index)
+        ax[1].imshow(input, cmap="gray")
+        ax[1].imshow(label_img, alpha=0.5, cmap="viridis")
+        ax[1].set_title("Original")
 
-        ax.imshow(input, cmap="gray")
-        ax.imshow(label, alpha=0.3, cmap="gray")
-        #ax.imshow(am, alpha=0.9, cmap="Blues")
-        # ax.imshow(data, alpha=0.25, cmap='Blues')
-        # ax.imshow(data_1, alpha=0.25, cmap='Greens')
-        ax.imshow(data_2, alpha=0.5, cmap="Reds")
-        ax.imshow(data_3, alpha=0.5, cmap="Purples")
+    ani = FuncAnimation(fig, animate, frames=label[0].shape[0], interval=50)
+    writer = PillowWriter(fps=12)
+    ani.save("output_128.gif", writer=writer)
 
-    ani = FuncAnimation(fig, animate, frames=predictions[0].shape[1], interval=50)
     plt.show()
