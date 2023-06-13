@@ -1,8 +1,7 @@
 import torch
 from tqdm import tqdm
-from load_paths import load_prepared_img_paths
 import numpy as np
-import config
+from tqdm.contrib.concurrent import process_map
 
 
 def calc_mean_std(paths):
@@ -29,15 +28,8 @@ def calc_mean_std(paths):
 
     return mean_std_dict
 
+# if __name__ == "__main__":
+#     mean_std = calc_mean_std(load_prepared_img_paths(config.DATASET_PROCESSED_PATH))
+#     print(mean_std)
+#     json.dump(mean_std)
 
-if __name__ == "__main__":
-    print(calc_mean_std(load_prepared_img_paths(config.DATASET_PROCESSED_PATH)))
-
-
-"""
-{
-    't1': {'mean': tensor(341.1601, device='cuda:0'), 'std': tensor(395.8610, device='cuda:0')}, 
-    't1ce': {'mean': tensor(467.0914, device='cuda:0'), 'std': tensor(557.0898, device='cuda:0')},
-    't2': {'mean': tensor(279.2286, device='cuda:0'), 'std': tensor(369.1520, device='cuda:0')},
-    'flair': {'mean': tensor(219.8044, device='cuda:0'), 'std': tensor(270.5645, device='cuda:0')}}
-"""

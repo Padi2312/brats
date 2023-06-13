@@ -24,8 +24,7 @@ class BratsDataset2D(Dataset):
             state = torch.get_rng_state()
             image = self.custom_transforms(image)
             torch.set_rng_state(state)
-            if self.custom_transforms_label is not None:
-                label = self.custom_transforms_label(label)
+            label = self.custom_transforms(label)
 
         label = label.squeeze(0)
         label = torch.nn.functional.one_hot(label.long(), 4)

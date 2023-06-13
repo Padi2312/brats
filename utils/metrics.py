@@ -13,10 +13,40 @@ class DiceScore(torch.nn.Module):
         self.num_classes = num_classes
         self.eps = eps
         self.activation = activation
-        self.mean = mean 
+        self.mean = mean
 
     def forward(self, logits, targets):
-        return dice_score(logits, targets, activation=self.activation,mean=self.mean)
+        return dice_score(logits, targets, activation=self.activation, mean=self.mean)
+
+
+class JaccardScore(torch.nn.Module):
+    def __init__(
+        self,
+        num_classes=4,
+        eps=1e-7,
+        activation=lambda t: torch.softmax(t, dim=1),
+        mean=True,
+    ):
+        super(JaccardScore, self).__init__()
+        self.num_classes = num_classes
+        self.eps = eps
+        self.activation = activation
+        self.mean = mean
+
+    def forward(self, logits, targets):
+        return jaccard_index(logits, targets, activation=self.activation)
+
+
+class PixelAccuracy(torch.nn.Module):
+    def __init__(
+        self,
+        mean=True,
+    ):
+        super(PixelAccuracy, self).__init__()
+        self.mean = mean
+
+    def forward(self, net, targets):
+        return pixel_accuracy(net, targets)
 
 
 def tp_fp_fn_tn(logits, targets, activation=lambda t: torch.softmax(t, dim=1)):
@@ -43,15 +73,21 @@ def dice_score(
         return dice
 
 
-def IoU(logits, targets, activation=lambda t: torch.softmax(t, dim=1), eps=1e-7):
-    probs = logits
-    if activation != None:
-        probs = activation(logits)
+def jaccard_index(
+    logits, targets, activation=lambda t: torch.softmax(t, dim=1), eps=1e-7, mean=True
+):
+    tp, fp, fn, _ = tp_fp_fn_tn(logits, targets, activation)
+    jaccard = (tp + eps) / (tp + fn + fp + eps)
+    if mean:
+        return torch.mean(jaccard)
+    else:
+        return jaccard
 
-    probs = probs.long()
-    targets = targets.long()
 
-    intersection = (probs & targets).sum((1, 2))  # logical AND
-    union = (probs | targets).sum((1, 2))  # logical OR
-    iou = (intersection + eps) / (union + eps)
-    return iou.mean().item()
+def pixel_accuracy(net, targets):
+    predicted_labels = torch.argmax(net, dim=1)
+    target_labels = torch.argmax(targets, dim=1)
+    correct_pixels = torch.sum(predicted_labels == target_labels).item()
+    total_pixels = predicted_labels.numel()
+    accuracy = correct_pixels / total_pixels
+    return accuracy
